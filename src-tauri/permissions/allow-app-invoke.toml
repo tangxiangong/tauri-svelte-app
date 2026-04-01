@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-app-invoke"
+description = "Allow greet, memory snapshot, and system info IPC commands."
+commands.allow = ["get_used_memory", "get_system_info"]

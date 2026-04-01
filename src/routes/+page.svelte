@@ -1,154 +1,173 @@
 <script lang="ts">
-  import { greetRust } from "$lib/command";
+  import { getUsedMemory, getSystemInfo } from "$lib/commands";
+  import type { Memory, ProcessMemoryInfo, SystemInfo } from "$lib/models";
+  import { pct } from "$lib/utils";
 
-  let name = $state("");
-  let greetMsg = $state("");
+  let systemInfo = $state<SystemInfo | null>(null);
+  let memory = $state<Memory | null>(null);
+  let topProcesses = $state<ProcessMemoryInfo[] | null>(null);
+  let loadError = $state<string | null>(null);
 
-  async function greet(event: Event) {
-    event.preventDefault();
-    greetMsg = await greetRust(name);
+  let refreshInFlight = false;
+
+  async function refreshSystem() {
+    if (refreshInFlight) return;
+    refreshInFlight = true;
+    loadError = null;
+    try {
+      const [info, snapshot] = await Promise.all([
+        getSystemInfo(),
+        getUsedMemory(10),
+      ]);
+      systemInfo = info;
+      memory = snapshot.memory;
+      topProcesses = snapshot.topProcesses;
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : "无法加载系统信息";
+      systemInfo = null;
+      memory = null;
+      topProcesses = null;
+    } finally {
+      refreshInFlight = false;
+    }
   }
+
+  $effect(() => {
+    void refreshSystem();
+    const id = setInterval(() => {
+      void refreshSystem();
+    }, 1000);
+    return () => clearInterval(id);
+  });
 </script>
 
-<main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
+<main class="page">
+  <div class="page-inner">
+    <header class="header">
+      <div class="header-brand">
+        <h1>系统信息</h1>
+        <span class="live-badge" title="每秒自动刷新">
+          <span class="live-dot" aria-hidden="true"></span>
+          实时
+        </span>
+      </div>
+      <p class="header-sub">内存与进程概览</p>
+    </header>
 
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
+    {#if loadError}
+      <div class="error" role="alert">
+        <span class="error-icon" aria-hidden="true">!</span>
+        {loadError}
+      </div>
+    {/if}
+
+    {#if systemInfo || memory}
+      <div class="card-row">
+        {#if systemInfo}
+          <section class="card card-elevated card-compact">
+            <div class="card-head">
+              <span class="card-icon card-icon--os" aria-hidden="true"></span>
+              <h2>操作系统</h2>
+            </div>
+            <dl class="kv kv-compact">
+              <dt>主机名</dt>
+              <dd>{systemInfo.hostName ?? "—"}</dd>
+              <dt>系统名称</dt>
+              <dd>{systemInfo.osName ?? "—"}</dd>
+              <dt>内核</dt>
+              <dd>{systemInfo.kernelVersion ?? "—"}</dd>
+              <dt>版本</dt>
+              <dd>{systemInfo.osVersion ?? "—"}</dd>
+              <dt>详细版本</dt>
+              <dd class="kv-long">{systemInfo.longOsVersion ?? "—"}</dd>
+              <dt>逻辑 CPU</dt>
+              <dd><span class="chip">{systemInfo.cpuCount} 核</span></dd>
+            </dl>
+          </section>
+        {/if}
+
+        {#if memory}
+          <section class="card card-elevated card-compact">
+            <div class="card-head">
+              <span class="card-icon card-icon--ram" aria-hidden="true"></span>
+              <h2>内存与交换</h2>
+            </div>
+            <div class="meter-block">
+              <div class="meter-head meter-head--compact">
+                <span class="meter-label">物理内存</span>
+                <span class="meter-value"
+                  >{memory.usedMemory.display}
+                  <span class="meter-sep">/</span>
+                  {memory.totalMemory.display}
+                  <span class="meter-pct"
+                    >（{pct(memory.usedMemory, memory.totalMemory)}%）</span
+                  ></span
+                >
+              </div>
+              <div
+                class="meter meter--compact"
+                style="--p: {pct(memory.usedMemory, memory.totalMemory)}"
+                role="progressbar"
+                aria-valuenow={pct(memory.usedMemory, memory.totalMemory)}
+                aria-valuemin="0"
+                aria-valuemax="100"
+              ></div>
+            </div>
+            <div class="meter-block">
+              <div class="meter-head meter-head--compact">
+                <span class="meter-label">交换分区</span>
+                <span class="meter-value"
+                  >{memory.usedSwap.display}
+                  <span class="meter-sep">/</span>
+                  {memory.totalSwap.display}
+                  <span class="meter-pct"
+                    >（{pct(memory.usedSwap, memory.totalSwap)}%）</span
+                  ></span
+                >
+              </div>
+              <div
+                class="meter meter--compact meter--swap"
+                style="--p: {pct(memory.usedSwap, memory.totalSwap)}"
+                role="progressbar"
+                aria-valuenow={pct(memory.usedSwap, memory.totalSwap)}
+                aria-valuemin="0"
+                aria-valuemax="100"
+              ></div>
+            </div>
+          </section>
+        {/if}
+      </div>
+    {/if}
+
+    {#if topProcesses}
+      <section class="card card-elevated card-table">
+        <div class="card-head">
+          <span class="card-icon card-icon--proc" aria-hidden="true"></span>
+          <h2>内存占用前列进程</h2>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="th-numeric">PID</th>
+                <th>名称</th>
+                <th class="th-numeric th-usage">占用</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each topProcesses as p, i}
+                <tr class:row-alt={i % 2 === 1}>
+                  <td class="mono td-numeric">{p.pid}</td>
+                  <td class="td-name" title={p.name}>{p.name}</td>
+                  <td class="mono td-numeric td-usage"
+                    >{p.totalMemory.display}</td
+                  >
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {/if}
   </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
-
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
 </main>
-
-<style>
-  .logo.vite:hover {
-    filter: drop-shadow(0 0 2em #747bff);
-  }
-
-  .logo.svelte-kit:hover {
-    filter: drop-shadow(0 0 2em #ff3e00);
-  }
-
-  :root {
-    font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-    font-size: 16px;
-    line-height: 24px;
-    font-weight: 400;
-
-    color: #0f0f0f;
-    background-color: #f6f6f6;
-
-    font-synthesis: none;
-    text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    -webkit-text-size-adjust: 100%;
-  }
-
-  .container {
-    margin: 0;
-    padding-top: 10vh;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    text-align: center;
-  }
-
-  .logo {
-    height: 6em;
-    padding: 1.5em;
-    will-change: filter;
-    transition: 0.75s;
-  }
-
-  .logo.tauri:hover {
-    filter: drop-shadow(0 0 2em #24c8db);
-  }
-
-  .row {
-    display: flex;
-    justify-content: center;
-  }
-
-  a {
-    font-weight: 500;
-    color: #646cff;
-    text-decoration: inherit;
-  }
-
-  a:hover {
-    color: #535bf2;
-  }
-
-  h1 {
-    text-align: center;
-  }
-
-  input,
-  button {
-    border-radius: 8px;
-    border: 1px solid transparent;
-    padding: 0.6em 1.2em;
-    font-size: 1em;
-    font-weight: 500;
-    font-family: inherit;
-    color: #0f0f0f;
-    background-color: #ffffff;
-    transition: border-color 0.25s;
-    box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-  }
-
-  button {
-    cursor: pointer;
-  }
-
-  button:hover {
-    border-color: #396cd8;
-  }
-  button:active {
-    border-color: #396cd8;
-    background-color: #e8e8e8;
-  }
-
-  input,
-  button {
-    outline: none;
-  }
-
-  #greet-input {
-    margin-right: 5px;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :root {
-      color: #f6f6f6;
-      background-color: #2f2f2f;
-    }
-
-    a:hover {
-      color: #24c8db;
-    }
-
-    input,
-    button {
-      color: #ffffff;
-      background-color: #0f0f0f98;
-    }
-    button:active {
-      background-color: #0f0f0f69;
-    }
-  }
-</style>
